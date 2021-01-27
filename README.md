@@ -1,1 +1,1 @@
-# spe
+A parser for .spe files.
