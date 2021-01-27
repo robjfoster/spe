@@ -92,7 +92,7 @@ class SPE():
         bins = np.array(range(len(self.data)))
         self.ebins = self.ener_fit[0] + self.ener_fit[1] * bins
         
-    def preamble(self):
+    def preamble(self) -> str:
         text = ""
         text += "File details:\n"
         text += f"\n---Sample description---\n{self.id}\n"
@@ -108,7 +108,7 @@ class SPE():
         return text
             
     @staticmethod
-    def gen_block_end(kw_row_dict, rows):
+    def gen_block_end(kw_row_dict: dict, rows: int):
     # Lookahead generator to find the final row of each data block
         it = iter(kw_row_dict)
         last = next(it)
@@ -117,7 +117,7 @@ class SPE():
             last = val
         yield last, rows
         
-    def get_block(self, keyword, data_blocks):
+    def get_block(self, keyword: str, data_blocks: dict) -> np.array:
         start, end = data_blocks[keyword]
         block_data = self.rawdata[start:end]
         if keyword == "$DATA:" or keyword == "$ROI:":
@@ -126,7 +126,7 @@ class SPE():
         else:
             return block_data
         
-    def minus(self, background):
+    def minus(self, background: np.array) -> np.array:
         return self.data - background.data
         
 def plot_spectrum(energy, counts, peaks=False, threshold=0, width=0, height=0):
