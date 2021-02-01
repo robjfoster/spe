@@ -82,7 +82,7 @@ class SPE():
         self.run_time = timedelta(seconds=int(self.meas_tim[0]))
         self.end_time = self.date + self.run_time
         self.data = self.blocks["$DATA:"]
-        self.roi = self.blocks["$ROI:"]
+        self.roi = "Does not parse ROI at the moment."
         self.presets = "\n".join(self.blocks["$PRESETS:"])
         self.ener_fit= tuple([float(i) for i in self.blocks["$ENER_FIT:"][0].split(" ")])
         self.mca_cal = f'Number of energy calibration factors = ' \
@@ -123,7 +123,7 @@ class SPE():
     def get_block(self, keyword: str, data_blocks: dict) -> np.array:
         start, end = data_blocks[keyword]
         block_data = self.rawdata[start:end]
-        if keyword == "$DATA:" or keyword == "$ROI:":
+        if keyword == "$DATA:":
             block_data = block_data[1:].astype(int)
             return block_data
         else:
@@ -139,10 +139,10 @@ class SPE():
         #plt.show()
         return new_spe
 
-    def subtract(self, background, bin_range=40) -> np.array:
+    def subtract(self, background: "SPE", bin_range=40) -> "SPE":
         # This probably shouldn't be an instance method whilst it returns new SPE
         if self.calib != background.calib:
-            breakpoint()
+            raise ValueError("Background calibration does not match.")
         best_quality = 1000000000000
         best_result = None
         best_bins = None
@@ -176,7 +176,7 @@ class SPE():
 # Since subtract returns a new SPE, this should be instance method. Can pass
 # title with info on sample and duration using instance attributes.
 def plot_spectrum(spe, peaks=False, threshold=0, width=0, height=0,
-                  distance=0, prominence=0):
+                  distance=0, prominence=0, save=False) -> None:
     alpha = 1
     if peaks:
         peaks, _ = find_peaks(spe.data, threshold=threshold, height=height,
@@ -189,13 +189,12 @@ def plot_spectrum(spe, peaks=False, threshold=0, width=0, height=0,
     plt.ylabel("Counts")
     plt.ylim(0, max(spe.data))
     plt.title(f"{spe.filepath}")
+    if save:
+        fn, _ = os.path.splitext(os.path.abspath(spe.filepath))
+        figure = plt.gcf()
+        figure.set_size_inches(4, 3)
+        plt.savefig(fn + ".png", bbox_inches="tight", dpi=200)
     plt.show()
-
-
-#fn = "../data/rocksalt_activation/rocksalt_sample2_run2.Spe"
-#spe = SPE(fn)
-#fn2 = "../data/rocksalt_activation/rocksalt_sample2_2blocks.Spe"
-#spe2 = SPE(fn2)
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
@@ -216,7 +215,7 @@ if __name__ == "__main__":
         bg_file = options.subtract
         background = SPE(bg_file)
         scaled_background = background.scale(signal.run_time / background.run_time)
-        spe_out = signal.subtract(scaled_background)
+        spe_out = signal.subtract(scaled_background, bin_range=0)
     else:
         spe_out = signal
     if options.plot:
