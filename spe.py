@@ -42,7 +42,7 @@ class SPE():
 
     def __init__(self, filepath: str) -> None:
         if not os.path.isfile(filepath):
-            sys.exit(f"Could not find {filepath}")
+            sys.exit(f"Could not find file: {filepath}")
         self.filepath = filepath
         self.blocks = {}
         self.data = np.array([])
@@ -161,7 +161,7 @@ class SPE():
             assert len(bins) == len(self.ebins) - np.abs(bin_offset)
             #quality = np.count_nonzero(reduced < 0)
             quality = sum(reduced[reduced<0]) * -1
-            print(bin_offset, quality)
+            print(f"Offset: {bin_offset}. Sum of bins < 0: {quality}")
             if quality < best_quality: 
                 best_offset = bin_offset
                 best_quality = quality
@@ -196,6 +196,21 @@ def plot_spectrum(spe, peaks=False, threshold=0, width=0, height=0,
         plt.savefig(fn + ".png", bbox_inches="tight", dpi=200)
     plt.show()
 
+def find_background(spe: SPE) -> SPE:
+    # Attempt to find appropriate background for given SPE.
+    bg_dir = os.path.abspath(f"{spe.filepath}/../../../Backgrounds")
+    print(f"Found background directory: {bg_dir}")
+    for fn in os.listdir(bg_dir):
+        print("Found possible background file.")
+        bg_spe = SPE(os.path.abspath(bg_dir + "/" + fn))
+        if bg_spe.calib == spe.calib:
+            print(f"Found matching background: {bg_spe.filepath}")
+            return bg_spe
+        else:
+            print("This background file doesn't match.")
+    print("Could not find matching background.")
+    return None
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("file", help="Filepath to .spe file", type=str)
@@ -211,9 +226,13 @@ if __name__ == "__main__":
     options = parse_args()
     signal = SPE(options.file)
     spe_out = None
-    if options.subtract:
-        bg_file = options.subtract
-        background = SPE(bg_file)
+    if options.subtract is not None:
+        if options.subtract == "":
+            print("No background file provided, searching.")
+            background = find_background(signal)
+        else:
+            bg_file = options.subtract
+            background = SPE(bg_file)
         scaled_background = background.scale(signal.run_time / background.run_time)
         spe_out = signal.subtract(scaled_background, bin_range=0)
     else:
