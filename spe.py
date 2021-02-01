@@ -1,3 +1,5 @@
+import argparse
+import copy
 from datetime import datetime, timedelta
 import os
 import sys
@@ -11,7 +13,7 @@ if sys.version_info[0] < 3 or sys.version_info[1] < 6:
 
 # The keywords used to delimit the sections of the output file.
 # Descriptions taken from: 
-# ORTEC Software File Structure Manualfor DOS and Windows® Systems
+# ORTEC Software File Structure Manual for DOS and Windows® Systems
 keywords = {
     "$SPEC_ID:": "One line of text describing the data",
     "$SPEC_REM:": "Any number of lines containing remarks about the data",
@@ -33,11 +35,11 @@ keywords = {
     "$SHAPE_CAL:": "This contains the number of FWHM calibration factors on "
                    "the first line,then the factors on the second line as "
                    "two numbers, separated by spaces.",
-    
+
 }
 
 class SPE():
-    
+
     def __init__(self, filepath: str) -> None:
         if not os.path.isfile(filepath):
             sys.exit(f"Could not find {filepath}")
@@ -54,7 +56,7 @@ class SPE():
             raise ValueError("Failed to parse file")
         print("success\n")
         print(self.preamble())
-        
+
     def parse(self) -> None:
         row_count = len(self.rawdata)
         delim_rows = {}
@@ -77,9 +79,9 @@ class SPE():
         self.date = datetime.strptime(self.blocks["$DATE_MEA:"][0], 
                                       '%m/%d/%Y %H:%M:%S')
         self.meas_tim = "".join(self.blocks["$MEAS_TIM:"]).split(" ")
-        self.end_time = self.date + timedelta(seconds=int(self.meas_tim[0]))
+        self.run_time = timedelta(seconds=int(self.meas_tim[0]))
+        self.end_time = self.date + self.run_time
         self.data = self.blocks["$DATA:"]
-        self.counts = self.data
         self.roi = self.blocks["$ROI:"]
         self.presets = "\n".join(self.blocks["$PRESETS:"])
         self.ener_fit= tuple([float(i) for i in self.blocks["$ENER_FIT:"][0].split(" ")])
@@ -90,8 +92,9 @@ class SPE():
                        f'{self.blocks["$SHAPE_CAL:"][0]}\n' \
                        f'{self.blocks["$SHAPE_CAL:"][1]}'
         bins = np.array(range(len(self.data)))
-        self.ebins = self.ener_fit[0] + self.ener_fit[1] * bins
-        
+        self.calib = tuple(float(i) for i in self.blocks["$MCA_CAL:"][1].split(" ")[:-1])
+        self.ebins = self.calib[0] + self.calib[1] * bins + self.calib[2] * bins * bins
+
     def preamble(self) -> str:
         text = ""
         text += "File details:\n"
@@ -106,7 +109,7 @@ class SPE():
         text += f"\n---Energy calibration---\n{self.mca_cal}\n"
         text += f"\n---Shape calibration---\n{self.shape_cal}\n"
         return text
-            
+
     @staticmethod
     def gen_block_end(kw_row_dict: dict, rows: int):
     # Lookahead generator to find the final row of each data block
@@ -116,7 +119,7 @@ class SPE():
             yield last, kw_row_dict[val]
             last = val
         yield last, rows
-        
+
     def get_block(self, keyword: str, data_blocks: dict) -> np.array:
         start, end = data_blocks[keyword]
         block_data = self.rawdata[start:end]
@@ -125,21 +128,96 @@ class SPE():
             return block_data
         else:
             return block_data
-        
-    def minus(self, background: np.array) -> np.array:
-        return self.data - background.data
-        
-def plot_spectrum(energy, counts, peaks=False, threshold=0, width=0, height=0):
+
+    def scale(self, factor):
+        # This probably shouldn't be an instance method whilst it returns new SPE
+        scaled_data = self.data * factor
+        new_spe = copy.deepcopy(self)
+        new_spe.data = scaled_data
+        #plt.scatter(self.ebins, self.data, s=0.2)
+        #plt.scatter(new_spe.ebins, new_spe.data, s=0.2)
+        #plt.show()
+        return new_spe
+
+    def subtract(self, background, bin_range=40) -> np.array:
+        # This probably shouldn't be an instance method whilst it returns new SPE
+        if self.calib != background.calib:
+            breakpoint()
+        best_quality = 1000000000000
+        best_result = None
+        best_bins = None
+        best_offset = None
+        for bin_offset in range(-bin_range, bin_range+1):
+            if bin_offset < 0:
+                reduced = self.data[-bin_offset:] - background.data[:bin_offset]
+                bins = self.ebins[-bin_offset:]
+            elif bin_offset > 0:
+                reduced = self.data[:-bin_offset] - background.data[bin_offset:]
+                bins = self.ebins[:-bin_offset]
+            else:
+                reduced = self.data - background.data
+                bins = self.ebins
+            assert len(reduced) == len(self.data) - np.abs(bin_offset)
+            assert len(bins) == len(self.ebins) - np.abs(bin_offset)
+            #quality = np.count_nonzero(reduced < 0)
+            quality = sum(reduced[reduced<0]) * -1
+            print(bin_offset, quality)
+            if quality < best_quality: 
+                best_offset = bin_offset
+                best_quality = quality
+                best_result = reduced
+                best_bins = bins
+        print(f"Best offset is {best_offset}")
+        new_spe = copy.deepcopy(self)
+        new_spe.data = best_result
+        new_spe.ebins = best_bins
+        return new_spe
+
+# Since subtract returns a new SPE, this should be instance method. Can pass
+# title with info on sample and duration using instance attributes.
+def plot_spectrum(spe, peaks=False, threshold=0, width=0, height=0,
+                  distance=0, prominence=0):
     alpha = 1
     if peaks:
-        peaks, _ = find_peaks(counts, threshold=threshold, height=height, width=width)
-        plt.plot(energy[peaks], counts[peaks], "x", c="orange")
+        peaks, _ = find_peaks(spe.data, threshold=threshold, height=height,
+                              width=width, distance=distance,
+                              prominence=prominence)
+        plt.plot(spe.ebins[peaks], spe.data[peaks], "x", c="orange")
         alpha=0.5
-    plt.scatter(energy, counts, s=0.2, alpha=alpha)
+    plt.scatter(spe.ebins, spe.data, s=0.1, alpha=alpha)
+    plt.xlabel("Energy (keV)")
+    plt.ylabel("Counts")
+    plt.ylim(0, max(spe.data))
+    plt.title(f"{spe.filepath}")
     plt.show()
-    
 
-fn = "data/rocksalt_activation/rocksalt_sample2_run2.Spe"
-spe = SPE(fn)
-fn2 = "data/rocksalt_activation/rocksalt_sample2_2blocks.Spe"
-spe2 = SPE(fn2)
+
+#fn = "../data/rocksalt_activation/rocksalt_sample2_run2.Spe"
+#spe = SPE(fn)
+#fn2 = "../data/rocksalt_activation/rocksalt_sample2_2blocks.Spe"
+#spe2 = SPE(fn2)
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("file", help="Filepath to .spe file", type=str)
+    parser.add_argument("-s", "--subtract", help="Subtract specified .spe file",
+                        type=str)
+    parser.add_argument("-p", "--plot", help="Plot spectrum", action="store_true")
+    args = parser.parse_args(argv)
+    if not os.path.exists(args.file):
+        parser.error(f"File {args.file} does not exist.")
+    return args
+
+if __name__ == "__main__":
+    options = parse_args()
+    signal = SPE(options.file)
+    spe_out = None
+    if options.subtract:
+        bg_file = options.subtract
+        background = SPE(bg_file)
+        scaled_background = background.scale(signal.run_time / background.run_time)
+        spe_out = signal.subtract(scaled_background)
+    else:
+        spe_out = signal
+    if options.plot:
+        plot_spectrum(spe_out) #peaks=True, prominence=50, distance=1000)#height=15, threshold=1, distance=80, width=8)
