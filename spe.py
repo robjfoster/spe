@@ -35,7 +35,6 @@ keywords = {
     "$SHAPE_CAL:": "This contains the number of FWHM calibration factors on "
                    "the first line,then the factors on the second line as "
                    "two numbers, separated by spaces.",
-
 }
 
 class SPE():
@@ -129,7 +128,7 @@ class SPE():
         else:
             return block_data
 
-    def scale(self, factor):
+    def scale(self, factor: float) -> "SPE":
         # This probably shouldn't be an instance method whilst it returns new SPE
         scaled_data = self.data * factor
         new_spe = copy.deepcopy(self)
@@ -139,7 +138,7 @@ class SPE():
         #plt.show()
         return new_spe
 
-    def subtract(self, background: "SPE", bin_range=40) -> "SPE":
+    def subtract(self, background: "SPE", bin_range: int=40) -> "SPE":
         # This probably shouldn't be an instance method whilst it returns new SPE
         if self.calib != background.calib:
             raise ValueError("Background calibration does not match.")
@@ -161,7 +160,7 @@ class SPE():
             assert len(bins) == len(self.ebins) - np.abs(bin_offset)
             #quality = np.count_nonzero(reduced < 0)
             quality = sum(reduced[reduced<0]) * -1
-            print(f"Offset: {bin_offset}. Sum of bins < 0: {quality}")
+            #print(f"Offset: {bin_offset}. Sum of bins < 0: {quality}")
             if quality < best_quality: 
                 best_offset = bin_offset
                 best_quality = quality
@@ -172,6 +171,11 @@ class SPE():
         new_spe.data = best_result
         new_spe.ebins = best_bins
         return new_spe
+
+    def save(self) -> None:
+        data_to_save = np.asarray([self.ebins, self.data]).T
+        fn, _ = os.path.splitext(os.path.abspath(self.filepath))
+        np.savetxt(fn+"_subtracted"+".csv", data_to_save, delimiter=",", header="energy (keV), counts")
 
 # Since subtract returns a new SPE, this should be instance method. Can pass
 # title with info on sample and duration using instance attributes.
@@ -184,12 +188,13 @@ def plot_spectrum(spe, peaks=False, threshold=0, width=0, height=0,
                               prominence=prominence)
         plt.plot(spe.ebins[peaks], spe.data[peaks], "x", c="orange")
         alpha=0.5
-    plt.scatter(spe.ebins, spe.data, s=0.1, alpha=alpha)
+    plt.plot(spe.ebins, spe.data, linewidth=0.5)
     plt.xlabel("Energy (keV)")
     plt.ylabel("Counts")
     plt.ylim(0, max(spe.data))
     plt.title(f"{spe.filepath}")
     if save:
+        spe.save()
         fn, _ = os.path.splitext(os.path.abspath(spe.filepath))
         figure = plt.gcf()
         figure.set_size_inches(4, 3)
@@ -217,6 +222,7 @@ def parse_args(argv=None):
     parser.add_argument("-s", "--subtract", help="Subtract specified .spe file",
                         type=str)
     parser.add_argument("-p", "--plot", help="Plot spectrum", action="store_true")
+    parser.add_argument("--save", help="Save plot and data. Requires --plot", action="store_true")
     args = parser.parse_args(argv)
     if not os.path.exists(args.file):
         parser.error(f"File {args.file} does not exist.")
@@ -234,8 +240,8 @@ if __name__ == "__main__":
             bg_file = options.subtract
             background = SPE(bg_file)
         scaled_background = background.scale(signal.run_time / background.run_time)
-        spe_out = signal.subtract(scaled_background, bin_range=0)
+        spe_out = signal.subtract(scaled_background)
     else:
         spe_out = signal
     if options.plot:
-        plot_spectrum(spe_out) #peaks=True, prominence=50, distance=1000)#height=15, threshold=1, distance=80, width=8)
+        plot_spectrum(spe_out, save=options.save) #peaks=True, prominence=50, distance=1000)#height=15, threshold=1, distance=80, width=8)
