@@ -61,7 +61,7 @@ class SPE():
         delim_rows = {}
         for row, value in enumerate(self.rawdata):
             if value in keywords:
-                delim_rows[value] = row    
+                delim_rows[value] = row
         next_delim_rows = {}
         for kw, row in self.gen_block_end(delim_rows, row_count):
             next_delim_rows[kw] = row
@@ -75,7 +75,7 @@ class SPE():
             self.blocks[kw] = self.get_block(kw, data_blocks)
         self.id = str(self.blocks["$SPEC_ID:"][0])
         self.rem = "\n".join(self.blocks["$SPEC_REM:"])
-        self.date = datetime.strptime(self.blocks["$DATE_MEA:"][0], 
+        self.date = datetime.strptime(self.blocks["$DATE_MEA:"][0],
                                       '%m/%d/%Y %H:%M:%S')
         self.meas_tim = "".join(self.blocks["$MEAS_TIM:"]).split(" ")
         self.run_time = timedelta(seconds=int(self.meas_tim[0]))
@@ -129,7 +129,6 @@ class SPE():
             return block_data
 
     def scale(self, factor: float) -> "SPE":
-        # This probably shouldn't be an instance method whilst it returns new SPE
         scaled_data = self.data * factor
         new_spe = copy.deepcopy(self)
         new_spe.data = scaled_data
@@ -139,7 +138,6 @@ class SPE():
         return new_spe
 
     def subtract(self, background: "SPE", bin_range: int=40) -> "SPE":
-        # This probably shouldn't be an instance method whilst it returns new SPE
         if self.calib != background.calib:
             raise ValueError("Background calibration does not match.")
         best_quality = 1000000000000
@@ -170,6 +168,61 @@ class SPE():
         new_spe = copy.deepcopy(self)
         new_spe.data = best_result
         new_spe.ebins = best_bins
+        return new_spe
+
+    def subtract_centered(
+        self, background: "SPE",
+        centre: float,
+        bin_range: int=40,
+        check_range: int=50,
+        check: bool=True
+        ) -> "SPE":
+        # Match background using a peak at wavelength "centre"
+        s_selection = np.where((self.ebins > centre - check_range) &
+                               (self.ebins < centre + check_range))[0]
+        s_bin_no = s_selection[np.argmax(self.data[s_selection])]
+        b_selection = np.where((background.ebins > centre - check_range) &
+                               (background.ebins < centre + check_range))[0]
+        b_bin_no = b_selection[np.argmax(background.data[b_selection])]
+        bin_offset = s_bin_no - b_bin_no
+        if check:
+            plt.plot(self.ebins, self.data, linewidth=0.5)
+            plt.axvline(self.ebins[s_bin_no], c='r', linewidth=0.5)
+            plt.axvline(int(centre-check_range), c='orange', linewidth=0.5, linestyle="--")
+            plt.axvline(int(centre+check_range), c='orange', linewidth=0.5, linestyle="--")
+            plt.show()
+            plt.plot(background.ebins, background.data, linewidth=0.5)
+            plt.axvline(background.ebins[b_bin_no], c='r', linewidth=0.5)
+            plt.axvline(int(centre-check_range), c='orange', linewidth=0.5, linestyle="--")
+            plt.axvline(int(centre+check_range), c='orange', linewidth=0.5, linestyle="--")
+            plt.show()
+            answer = input("Was the red line at the correct peak? (y/n):\n")
+            if answer != 'y':
+                raise AssertionError("Incorrect peak identified")
+        print(f"Offset at wavelength {centre} (bin {s_bin_no}) is {bin_offset}")
+        if bin_offset < 0:
+            reduced = self.data[-bin_offset:] - background.data[:bin_offset]
+            bins = self.ebins[-bin_offset:]
+        elif bin_offset > 0:
+            reduced = self.data[:-bin_offset] - background.data[bin_offset:]
+            bins = self.ebins[:-bin_offset]
+        else:
+            reduced = self.data - background.data
+            bins = self.ebins
+        new_spe = copy.deepcopy(self)
+        new_spe.data = reduced
+        new_spe.ebins = bins
+        return new_spe
+
+    def smooth(self, window: int=10) -> "SPE":
+        bin_cumsum = np.cumsum(self.data)
+        moving_average = (bin_cumsum[window:] - bin_cumsum[:-window]) / window
+        #plt.plot(self.ebins, self.data, linewidth=0.5)
+        #plt.plot(self.ebins[int(window/2):int(-window/2)], moving_average, linewidth=0.5)
+        #plt.show()
+        new_spe = copy.deepcopy(self)
+        new_spe.data = moving_average
+        new_spe.ebins = self.ebins[int(window/2):int(-window/2)]
         return new_spe
 
     def save(self) -> None:
@@ -223,6 +276,10 @@ def parse_args(argv=None):
                         type=str)
     parser.add_argument("-p", "--plot", help="Plot spectrum", action="store_true")
     parser.add_argument("--save", help="Save plot and data. Requires --plot", action="store_true")
+    parser.add_argument("--smooth", help="Smooth the data", action="store_true")
+    parser.add_argument("--centre",
+                        help="Centre background subtraction on peak at wavelength [centre]",
+                        type=float)
     args = parser.parse_args(argv)
     if not os.path.exists(args.file):
         parser.error(f"File {args.file} does not exist.")
@@ -239,8 +296,14 @@ if __name__ == "__main__":
         else:
             bg_file = options.subtract
             background = SPE(bg_file)
+        if options.smooth:
+            signal = signal.smooth()
+            background = background.smooth()
         scaled_background = background.scale(signal.run_time / background.run_time)
-        spe_out = signal.subtract(scaled_background)
+        if options.centre:
+            signal.subtract_centered(scaled_background, options.centre)
+        else:
+            spe_out = signal.subtract(scaled_background)
     else:
         spe_out = signal
     if options.plot:
